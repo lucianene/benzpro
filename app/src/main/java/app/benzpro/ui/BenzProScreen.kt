@@ -43,6 +43,9 @@ fun BenzProScreen(viewModel: BenzProViewModel) {
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) viewModel.onConnectClicked()
     }
+    val shareLogLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { }
 
     LaunchedEffect(viewModel.snackbarMessage) {
         val msg = viewModel.snackbarMessage ?: return@LaunchedEffect
@@ -53,6 +56,11 @@ fun BenzProScreen(viewModel: BenzProViewModel) {
         val intent = viewModel.bluetoothEnableIntent ?: return@LaunchedEffect
         viewModel.consumeBluetoothEnable()
         btEnableLauncher.launch(intent)
+    }
+    LaunchedEffect(viewModel.shareLogIntent) {
+        val intent = viewModel.shareLogIntent ?: return@LaunchedEffect
+        viewModel.consumeShareLog()
+        shareLogLauncher.launch(intent)
     }
     LaunchedEffect(Unit) {
         val window = (view.context as? Activity)?.window ?: return@LaunchedEffect

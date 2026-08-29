@@ -67,18 +67,25 @@ object UdsMessage {
     }
 
     /**
-     * Parse 0x59 ReadDTCInformation only. Returns null if this is not a positive 0x59.
-     * Record: 3-byte DTC (SAE high/mid + FTB) + 1-byte status.
+     * Parse 0x59 by subfunction. 0x02 (reportDTCByStatusMask) is
+     * 59 02 DTCStatusAvailabilityMask { DTCHigh, DTCMid, DTCLow/FTB, status }*
+     * — never infer the mask from payload length.
      */
     fun parseReadDtc(rawBytes: List<Int>): List<DtcRecord>? {
         val p = payload(rawBytes)
         if (p.firstOrNull() != POSITIVE_READ_DTC) return null
         if (p.size < 2) return emptyList()
-        val sub = p[1]
-        if (sub == 0x01) return emptyList()
-        var i = 2
-        val rest = p.size - i
-        if (rest % 4 == 1) i++
+        return when (p[1]) {
+            0x01 -> emptyList()
+            0x02, 0x0A, 0x13, 0x15, 0x17 -> recordsAfterAvailabilityMask(p)
+            else -> null
+        }
+    }
+
+    /** 59 &lt;sub&gt; &lt;mask&gt; then repeating 4-byte DTC+status. */
+    private fun recordsAfterAvailabilityMask(p: List<Int>): List<DtcRecord> {
+        if (p.size < 3) return emptyList()
+        var i = 3
         val out = mutableListOf<DtcRecord>()
         while (i + 3 < p.size) {
             val high = p[i]

@@ -126,9 +126,12 @@ class SppTransport(
 
     override suspend fun close() = withContext(Dispatchers.IO) {
         closing = true
-        readerJob?.cancel()
+        val job = readerJob
         readerJob = null
+        job?.cancel()
         runCatching { socket?.close() }
         socket = null
+        job?.join()
+        Unit
     }
 }

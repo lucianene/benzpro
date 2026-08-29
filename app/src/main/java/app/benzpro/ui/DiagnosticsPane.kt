@@ -23,6 +23,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -57,7 +58,7 @@ fun DiagnosticsPane(viewModel: BenzProViewModel, modifier: Modifier = Modifier) 
             logState.scrollToItem(viewModel.logLines.lastIndex)
         }
     }
-    val timeFmt = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
+    val timeFmt = remember { SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()) }
     Column(modifier.fillMaxSize().padding(12.dp)) {
         if (viewModel.vehicle.capabilities.healthStrip) {
             HealthStrip(viewModel)
@@ -137,7 +138,17 @@ fun DiagnosticsPane(viewModel: BenzProViewModel, modifier: Modifier = Modifier) 
             }
         }
         Spacer(Modifier.height(8.dp))
-        Text("Log", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("Log", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { viewModel.copyLog() }) { Text("Copy") }
+                TextButton(onClick = { viewModel.exportLog() }) { Text("Export") }
+            }
+        }
         Spacer(Modifier.height(4.dp))
         LazyColumn(
             state = logState,

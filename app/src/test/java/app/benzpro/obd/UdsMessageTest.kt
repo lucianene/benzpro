@@ -46,6 +46,18 @@ class UdsMessageTest {
     }
 
     @Test
+    fun reportDtcByStatusMaskAlwaysConsumesOneMaskByte() {
+        val empty = UdsMessage.parseReadDtc(hex("59 02 FF"))!!
+        assertTrue(empty.isEmpty())
+        val one = UdsMessage.parseReadDtc(hex("59 02 FF 11 27 12 2E"))!!
+        assertEquals(1, one.size)
+        assertEquals(0x11, one[0].high)
+        val restDivisibleBy4 = hex("59 02 11 27 12 2E")
+        assertEquals(0, (restDivisibleBy4.size - 2) % 4)
+        assertTrue(UdsMessage.parseReadDtc(restDivisibleBy4)!!.isEmpty())
+    }
+
+    @Test
     fun positive59WithMaskAndThreeRecords() {
         val raw = hex("59 02 FF 11 27 12 2E B5 90 2F AE 40 41 D2 2E")
         val records = UdsMessage.parseReadDtc(raw)!!

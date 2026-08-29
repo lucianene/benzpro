@@ -50,7 +50,7 @@ class MercedesBackend(
     override suspend fun clearCodes(elm: ElmClient): String {
         elm.restoreObdCan11()
         val raw = ObdService.clearDtcs(elm)
-        if (ElmClient.isNoData(raw) && !raw.contains("44")) {
+        if (ElmClient.isNoData(raw) && !ElmClient.hasPositiveSid(raw, 0x44)) {
             error("Clear failed: $raw")
         }
         return raw

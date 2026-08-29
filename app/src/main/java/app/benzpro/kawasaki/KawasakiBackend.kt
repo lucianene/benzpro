@@ -6,6 +6,7 @@ import app.benzpro.obd.DtcDecoder
 import app.benzpro.obd.DtcEntry
 import app.benzpro.obd.ObdService
 import app.benzpro.obd.Pid
+import app.benzpro.obd.UdsMessage
 import app.benzpro.util.rethrowCancel
 import app.benzpro.vehicle.CodeReadResult
 import app.benzpro.vehicle.DiagnosticBackend
@@ -21,6 +22,7 @@ class KawasakiBackend(
         log.info("Z1000 KWP init — needs 4-pin KDS → 16-pin cable; ABS is a separate plug")
         runCatching { elm.at("ATSP5", 2500) }.rethrowCancel()
         runCatching { elm.at("ATH1") }.rethrowCancel()
+        runCatching { elm.at("ATS1") }.rethrowCancel()
         runCatching { elm.at("ATSH8112F1") }.rethrowCancel()
         val fi = runCatching { elm.at("ATFI", 3000) }.rethrowCancel().getOrNull()
         if (fi != null) log.info("ATFI $fi")
@@ -80,14 +82,21 @@ class KawasakiBackend(
 
     private suspend fun readVia(elm: ElmClient, cmds: List<String>, status: String): List<DtcEntry> {
         cmds.forEach { cmd ->
-            val raw = runCatching { elm.command(cmd, 2500) }.rethrowCancel().getOrNull() ?: return@forEach
-            if (ElmClient.isNoData(raw)) return@forEach
-            val bytes = ElmClient.hexBytes(raw)
-            val codes = DtcDecoder.fromBytes(bytes.drop(1))
+            val codes = when (cmd) {
+                "03" -> runCatching { ObdService.readDtcs(elm, 0x03) }.rethrowCancel().getOrNull()
+                "13" -> runCatching { ObdService.readDtcs(elm, 0x13) }.rethrowCancel().getOrNull()
+                else -> {
+                    val raw = runCatching { elm.command(cmd, 2500) }.rethrowCancel().getOrNull() ?: return@forEach
+                    if (ElmClient.isNoData(raw)) return@forEach
+                    val bytes = ElmClient.hexBytes(raw)
+                    UdsMessage.parseKwpDtc(bytes)?.map { (a, b) -> DtcDecoder.format(a, b) }
+                        ?: DtcDecoder.fromBytes(bytes.drop(1)).takeIf { it.isNotEmpty() }
+                }
+            }.orEmpty()
             if (codes.isNotEmpty()) {
                 return codes.map { DtcEntry(it, DtcDecoder.saeTitle(it), status) }
             }
-            log.info("$cmd → $raw")
+            log.info("$cmd → no DTCs")
         }
         return emptyList()
     }

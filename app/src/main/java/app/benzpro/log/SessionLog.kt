@@ -1,5 +1,8 @@
 package app.benzpro.log
 
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
 class SessionLog(
@@ -31,4 +34,11 @@ class SessionLog(
 
     @Synchronized
     fun snapshot(): List<LogLine> = lines.toList()
+
+    fun exportText(): String {
+        val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+        return snapshot().joinToString("\n") { line ->
+            "${fmt.format(Date(line.atMs))}  ${line.kind.name.padEnd(7)}  ${line.text}"
+        }
+    }
 }

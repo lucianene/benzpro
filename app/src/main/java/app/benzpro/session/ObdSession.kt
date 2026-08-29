@@ -137,21 +137,24 @@ class ObdSession(
     suspend fun readCodes(): List<DtcEntry> {
         val client = requireElm()
         requireEcu()
-        val result = backend.readCodes(client)
-        val extra = if (profile.elmInit == ElmInitKind.MercedesCan) {
-            val uds = runCatching { mercedesProto.readDtcs(client) }.rethrowCancel().getOrDefault(emptyList())
-            val perm = runCatching { mercedesProto.readPermanentDtcs(client) }.rethrowCancel().getOrDefault(emptyList())
-            runCatching { client.restoreObdCan11() }.rethrowCancel()
-            mergeDtcs(uds, perm)
-        } else {
-            emptyList()
+        try {
+            val result = backend.readCodes(client)
+            val extra = if (profile.elmInit == ElmInitKind.MercedesCan) {
+                val uds = runCatching { mercedesProto.readDtcs(client) }.rethrowCancel().getOrDefault(emptyList())
+                val perm = runCatching { mercedesProto.readPermanentDtcs(client) }.rethrowCancel().getOrDefault(emptyList())
+                mergeDtcs(uds, perm)
+            } else {
+                emptyList()
+            }
+            val merged = mergeDtcs(result.all, extra)
+            log.success(
+                "codes OBD stored=${result.stored.size} pending=${result.pending.size} perm=${result.permanent.size}" +
+                    " · CDI UDS=${extra.size} · shown=${merged.size}",
+            )
+            return merged
+        } finally {
+            restoreCan11()
         }
-        val merged = mergeDtcs(result.all, extra)
-        log.success(
-            "codes OBD stored=${result.stored.size} pending=${result.pending.size} perm=${result.permanent.size}" +
-                " · CDI UDS=${extra.size} · shown=${merged.size}",
-        )
-        return merged
     }
 
     private fun mergeDtcs(first: List<DtcEntry>, extra: List<DtcEntry>): List<DtcEntry> {
@@ -180,15 +183,18 @@ class ObdSession(
     suspend fun clearCodes(): String {
         val client = requireElm()
         requireEcu()
-        val raw = backend.clearCodes(client)
-        val uds = if (profile.elmInit == ElmInitKind.MercedesCan) {
-            runCatching { mercedesProto.clearDtcs(client) }.rethrowCancel().getOrNull()
-        } else {
-            null
+        try {
+            val raw = backend.clearCodes(client)
+            val uds = if (profile.elmInit == ElmInitKind.MercedesCan) {
+                runCatching { mercedesProto.clearDtcs(client) }.rethrowCancel().getOrNull()
+            } else {
+                null
+            }
+            log.success("clear sent: $raw" + if (uds != null) " · UDS $uds" else "")
+            return raw
+        } finally {
+            restoreCan11()
         }
-        runCatching { client.restoreObdCan11() }.rethrowCancel()
-        log.success("clear sent: $raw" + if (uds != null) " · UDS $uds" else "")
-        return raw
     }
 
     suspend fun freezeFrame(code: String): String? {
@@ -247,48 +253,66 @@ class ObdSession(
         requireEcu()
         val saved = moduleMapStore.load(profile.id)
         val items = mutableListOf<ModuleScanItem>()
-        MercedesModules.catalog.forEach { module ->
-            val hit = saved[module.id]?.let { addr ->
-                runCatching {
-                    mercedesProto.apply(client, addr)
-                    if (mercedesProto.ping(client)) addr else null
-                }.rethrowCancel().getOrNull()
-            } ?: module.targets.firstNotNullOfOrNull { target ->
-                mercedesProto.tryTarget(client, module, target)
+        try {
+            MercedesModules.catalog.forEach { module ->
+                val hit = saved[module.id]?.let { addr ->
+                    runCatching {
+                        if (mercedesProto.applyAndPing(client, addr)) addr else null
+                    }.rethrowCancel().getOrNull()
+                } ?: module.targets.firstNotNullOfOrNull { target ->
+                    mercedesProto.tryTarget(client, module, target)
+                }
+                if (hit == null) {
+                    log.warn("${module.name}: no response")
+                    items.add(ModuleScanItem(module, false, null, null, null, emptyList()))
+                } else {
+                    val codes = runCatching { mercedesProto.readDtcs(client) }.rethrowCancel().getOrDefault(emptyList())
+                    val identity = runCatching { mercedesProto.identity(client) }.rethrowCancel().getOrNull()
+                    log.success("${module.name}: present · ${codes.size} DTCs")
+                    items.add(ModuleScanItem(module, true, hit, codes.size, identity, codes))
+                }
             }
-            if (hit == null) {
-                log.warn("${module.name}: no response")
-                items.add(ModuleScanItem(module, false, null, null, null, emptyList()))
-            } else {
-                val codes = runCatching { mercedesProto.readDtcs(client) }.rethrowCancel().getOrDefault(emptyList())
-                val identity = runCatching { mercedesProto.identity(client) }.rethrowCancel().getOrNull()
-                log.success("${module.name}: present · ${codes.size} DTCs")
-                items.add(ModuleScanItem(module, true, hit, codes.size, identity, codes))
+            val merged = saved.toMutableMap()
+            items.forEach { item ->
+                val addr = item.address
+                if (item.present && addr != null) merged[item.module.id] = addr
             }
+            moduleMapStore.save(profile.id, merged)
+            return items
+        } finally {
+            restoreCan11()
         }
-        val map = items.mapNotNull { it.address }.associateBy { it.moduleId }
-        moduleMapStore.save(profile.id, map)
-        runCatching { client.restoreObdCan11() }.rethrowCancel()
-        return items
     }
 
     suspend fun readModule(item: ModuleScanItem): ModuleScanItem {
         val client = requireElm()
         val addr = item.address ?: return item
-        mercedesProto.apply(client, addr)
-        val codes = mercedesProto.readDtcs(client)
-        val identity = runCatching { mercedesProto.identity(client) }.rethrowCancel().getOrNull()
-        runCatching { client.restoreObdCan11() }.rethrowCancel()
-        return item.copy(codes = codes, dtcCount = codes.size, identity = identity)
+        try {
+            mercedesProto.apply(client, addr)
+            val codes = mercedesProto.readDtcs(client)
+            val identity = runCatching { mercedesProto.identity(client) }.rethrowCancel().getOrNull()
+            return item.copy(codes = codes, dtcCount = codes.size, identity = identity)
+        } finally {
+            restoreCan11()
+        }
     }
 
     suspend fun clearModule(item: ModuleScanItem): String {
         val client = requireElm()
         val addr = item.address ?: error("Module not present")
-        mercedesProto.apply(client, addr)
-        val raw = mercedesProto.clearDtcs(client)
-        runCatching { client.restoreObdCan11() }.rethrowCancel()
-        return raw
+        try {
+            mercedesProto.apply(client, addr)
+            return mercedesProto.clearDtcs(client)
+        } finally {
+            restoreCan11()
+        }
+    }
+
+    private suspend fun restoreCan11() {
+        val client = elm ?: return
+        withContext(NonCancellable) {
+            runCatching { client.restoreObdCan11() }
+        }
     }
 
     private fun requireElm(): ElmClient {

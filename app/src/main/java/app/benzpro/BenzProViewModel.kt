@@ -3,6 +3,9 @@ package app.benzpro
 import android.Manifest
 import android.app.Application
 import android.bluetooth.BluetoothAdapter
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import androidx.compose.runtime.getValue
@@ -40,6 +43,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.delay
@@ -77,6 +81,8 @@ class BenzProViewModel(application: Application) : AndroidViewModel(application)
     var snackbarMessage by mutableStateOf<String?>(null)
         private set
     var bluetoothEnableIntent by mutableStateOf<Intent?>(null)
+        private set
+    var shareLogIntent by mutableStateOf<Intent?>(null)
         private set
     var showDeviceSheet by mutableStateOf(false)
     var showGarage by mutableStateOf(false)
@@ -190,6 +196,37 @@ class BenzProViewModel(application: Application) : AndroidViewModel(application)
 
     fun consumeBluetoothEnable() {
         bluetoothEnableIntent = null
+    }
+
+    fun consumeShareLog() {
+        shareLogIntent = null
+    }
+
+    fun copyLog() {
+        val text = log.exportText()
+        if (text.isBlank()) {
+            snack("Log is empty")
+            return
+        }
+        val clipboard = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("BenzPro log", text))
+        snack("Log copied")
+    }
+
+    fun exportLog() {
+        val text = log.exportText()
+        if (text.isBlank()) {
+            snack("Log is empty")
+            return
+        }
+        shareLogIntent = Intent.createChooser(
+            Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, "BenzPro log")
+                putExtra(Intent.EXTRA_TEXT, text)
+            },
+            "Export log",
+        )
     }
 
     fun selectPane(next: Pane) {
@@ -408,8 +445,9 @@ class BenzProViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun connect(address: String, name: String, fromAuto: Boolean) {
-        if (connectJob?.isActive == true) return
+        val previous = connectJob
         connectJob = viewModelScope.launch {
+            previous?.cancelAndJoin()
             withPausedPoll {
                 elmState = LinkState.Working
                 try {
@@ -445,9 +483,18 @@ class BenzProViewModel(application: Application) : AndroidViewModel(application)
 
     private suspend fun refreshHealth(mil: String? = null) {
         milText = mil ?: "—"
-        voltageText = session.healthValue(0x42) ?: session.adapterVoltage() ?: "—"
+        val advertised = session.supportedPids
+        voltageText = if (advertised.isEmpty() || 0x42 in advertised) {
+            session.healthValue(0x42) ?: session.adapterVoltage() ?: "—"
+        } else {
+            session.adapterVoltage() ?: "—"
+        }
         coolantText = session.healthValue(0x05) ?: "—"
-        dpfText = session.healthValue(0x7A) ?: "—"
+        dpfText = if (advertised.isEmpty() || 0x7A in advertised) {
+            session.healthValue(0x7A) ?: "—"
+        } else {
+            "n/a"
+        }
     }
 
     private fun startPoll() {
@@ -463,16 +510,18 @@ class BenzProViewModel(application: Application) : AndroidViewModel(application)
                 if (elmState == LinkState.Up) {
                     var anyLost = false
                     var anyValue = false
+                    var anyEmpty = false
                     val advertised = session.supportedPids
-                    selectedPids.toList().forEach { id ->
-                        if (advertised.isNotEmpty() && id !in advertised) return@forEach
+                    for (id in selectedPids.toList()) {
+                        if (pollPaused.get() > 0) break
+                        if (advertised.isNotEmpty() && id !in advertised) continue
                         val pid = PidCatalog.forId(id)
                         when (val result = session.readLive(pid, 1500L)) {
                             is PidRead.Value -> {
                                 liveValues[id] = result.text
                                 anyValue = true
                             }
-                            PidRead.Empty -> Unit
+                            PidRead.Empty -> anyEmpty = true
                             PidRead.Timeout -> Unit
                             PidRead.LinkLost -> anyLost = true
                         }
@@ -492,9 +541,9 @@ class BenzProViewModel(application: Application) : AndroidViewModel(application)
                             session.markEcuUp()
                             syncLinks()
                         }
-                    } else if (selectedPids.isNotEmpty()) {
+                    } else if (anyEmpty && selectedPids.isNotEmpty()) {
                         silentCycles++
-                        if (silentCycles >= 2 && ecuState == LinkState.Up) {
+                        if (silentCycles >= 3 && ecuState == LinkState.Up) {
                             session.markEcuSilent()
                             syncLinks()
                             if (!toldSilent) {
