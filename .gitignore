@@ -13,7 +13,9 @@
 local.properties
 /local.properties
 .kotlin/
-.cursor/
+.cursor/*
+!.cursor/skills/
+!.cursor/skills/**
 *.keystore
 *.jks
 keystore.properties
