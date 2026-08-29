@@ -18,13 +18,19 @@ class MercedesBackend(
     override val defaultSelectedPidIds: Set<Int> = PidCatalog.defaultSelected()
 
     override suspend fun probeEcu(elm: ElmClient): EcuProbeResult {
-        elm.restoreObdBroadcast()
-        val pid000 = runCatching { ObdService.readPidPayload(elm, 1, 0x00, 4000) }.rethrowCancel().getOrNull()
+        log.info("pin ISO 15765-4 CAN 11/500 — skip ATSP0 auto-search")
+        elm.restoreObdCan11()
+        var pid000 = runCatching { ObdService.readPidPayload(elm, 1, 0x00, 3000) }.rethrowCancel().getOrNull()
+        if (pid000 == null) {
+            log.info("0100 at 7E0 silent — retry functional 7DF")
+            elm.restoreObdBroadcast()
+            pid000 = runCatching { ObdService.readPidPayload(elm, 1, 0x00, 3000) }.rethrowCancel().getOrNull()
+            runCatching { elm.restoreObdCan11() }.rethrowCancel()
+        }
         if (pid000 == null) {
             log.warn("0100 no response — ignition on?")
             return EcuProbeResult(false, emptySet(), null, "ELM up, no ECU (ignition on?)")
         }
-        runCatching { elm.restoreObdCan11() }.rethrowCancel()
         val supported = ObdService.readSupported(elm)
         val vin = ObdService.readVin(elm)
         if (vin != null) {

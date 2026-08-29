@@ -155,10 +155,12 @@ class ElmClient(
         }
     }
 
+    /** Functional 7DF on pinned CAN 11/500 — never ATSP0; V-LINK auto-search stalls on SEARCHING. */
     suspend fun restoreObdBroadcast() = exclusive {
-        send("ATSP0", 2500)
+        send("ATSP6")
         runCatching { send("ATCRA") }.rethrowCancel()
-        runCatching { send("ATSH 7DF") }.rethrowCancel()
+        runCatching { send("ATAR") }.rethrowCancel()
+        send("ATSH 7DF")
     }
 
     /** Pin ISO 15765 11-bit / 500k. Clear ATCRA then ATAR — V-LINK drops Mode 01 if the filter is wrong. */
